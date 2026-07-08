@@ -1,0 +1,80 @@
+# ML-based RTO prediction for CoAP
+
+Predicting retransmission timeouts (RTO) for the CoAP protocol on constrained
+IoT devices using support vector regression, compared against the standard
+CoAP, CoCoA and CoCoA+ timeout algorithms.
+
+## Background
+
+CoAP uses a fixed backoff schedule to decide when to retransmit a message that
+has not been acknowledged. That schedule does not adapt to the actual network
+conditions a device is experiencing. This project trains machine learning models
+to predict a suitable RTO from a few lightweight features, so the timeout can
+follow the current conditions instead of a fixed rule.
+
+The models are kept small on purpose, so the approach stays realistic for
+resource constrained devices.
+
+## What it compares
+
+The evaluation runs several timeout strategies against each other:
+
+- CoAP, the standard fixed backoff (RFC 7252)
+- CoCoA and CoCoA+, two established adaptive baselines
+- Linear support vector regression
+- Kernel support vector regression
+- Linear support vector regression with Bayesian optimization
+
+A separate random forest classifier predicts whether a transmission is likely
+to time out, used to inform the policy.
+
+## Features used by the models
+
+- srtt_ms, smoothed round trip time
+- rttvar_ms, round trip time variation
+- attempt, current retransmission attempt number
+- success_rate_window, recent success rate
+- inter_arrival_ms, time between application messages
+
+## Simulator
+
+The models are trained and tested on data from a network simulator written in
+Python. It models several clients sending over a channel with configurable
+conditions, which makes it possible to compare all strategies under the same
+scenarios.
+
+## How to run
+
+Install the dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+Run the full pipeline:
+
+```bash
+python run_all.py
+```
+
+This runs the steps in order:
+
+1. `data_from_sim.py` generates training data from the simulator into `data/training_data.csv`
+2. `train_linear.py` trains the linear support vector regression model
+3. `train_kernel.py` trains the kernel support vector regression model
+4. `train_drop.py` trains the random forest timeout classifier
+5. `evaluate_policy.py` evaluates every strategy across load scenarios
+6. `generate_report.py` builds summary plots and tables
+
+You can also run any single script on its own once the training data exists.
+
+## Output
+
+- Plots in `plots/extended_report/` and `plots/results/`
+- Summary tables as CSV files in the same folders
+- Figures comparing throughput, latency and miss rate across the strategies
+
+## Requirements
+
+Python with numpy, pandas, scikit-learn, joblib, matplotlib and seaborn. All
+listed in `requirements.txt`.
