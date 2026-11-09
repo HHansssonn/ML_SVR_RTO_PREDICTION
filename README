@@ -1,80 +1,118 @@
 # ML-based RTO prediction for CoAP
 
-Predicting retransmission timeouts (RTO) for the CoAP protocol on constrained
-IoT devices using support vector regression, compared against the standard
-CoAP, CoCoA and CoCoA+ timeout algorithms.
+This project predicts retransmission timeouts (RTO) for the CoAP protocol on
+constrained IoT devices using support vector regression (SVR). The predicted
+timeouts are compared against the standard CoAP backoff and against CoCoA and
+CoCoA+ in a Python network simulator.
 
 ## Background
 
 CoAP uses a fixed backoff schedule to decide when to retransmit a message that
-has not been acknowledged. That schedule does not adapt to the actual network
-conditions a device is experiencing. This project trains machine learning models
-to predict a suitable RTO from a few lightweight features, so the timeout can
-follow the current conditions instead of a fixed rule.
+has not been acknowledged. That schedule does not adapt to the network
+conditions a device is actually experiencing. This project trains small
+regression models to predict a suitable RTO from a few lightweight features,
+so the timeout can follow current conditions instead of a fixed rule.
 
-The models are kept small on purpose, so the approach stays realistic for
-resource constrained devices.
+The models are kept small on purpose, and the simulator charges each
+prediction an inference delay and an energy cost, so the comparison stays
+realistic for resource constrained devices.
 
-## What it compares
+## Strategies compared
 
-The evaluation runs several timeout strategies against each other:
+The evaluation runs six timeout strategies under the same scenarios.
 
-- CoAP, the standard fixed backoff (RFC 7252)
-- CoCoA and CoCoA+, two established adaptive baselines
-- Linear support vector regression
-- Kernel support vector regression
-- Linear support vector regression with Bayesian optimization
+- **CoAP**, the standard binary exponential backoff (RFC 7252)
+- **CoCoA** and **CoCoA+**, simplified versions of the two adaptive baselines
+  with a variable backoff factor
+- **SVR (Linear)**, a linear SVR that predicts the RTO for every attempt
+- **SVR (Kernel)**, an RBF kernel SVR that predicts the RTO for every attempt
+- **SVR (Linear)+BO**, a linear SVR that predicts the RTO only for the first
+  attempt and then grows it with an adaptive backoff factor based on the
+  ratio of RTT variation to smoothed RTT. This saves inference on
+  retransmissions. BO here stands for backoff, not Bayesian optimization.
 
-A separate random forest classifier predicts whether a transmission is likely
-to time out, used to inform the policy.
+All three SVR strategies also use a random forest classifier that estimates
+how likely a transmission is to time out. From the third retransmission
+onwards, the client gives up on the message if that probability is above a
+threshold, instead of continuing to retransmit.
 
-## Features used by the models
+## Features
 
-- srtt_ms, smoothed round trip time
-- rttvar_ms, round trip time variation
-- attempt, current retransmission attempt number
-- success_rate_window, recent success rate
-- inter_arrival_ms, time between application messages
+The regression models use five features that a device can compute cheaply.
+
+- `srtt_ms`, smoothed round trip time
+- `rttvar_ms`, round trip time variation
+- `attempt`, current retransmission attempt number
+- `success_rate_window`, recent success rate
+- `inter_arrival_ms`, time between application messages
+
+The timeout classifier uses the same features except `attempt`.
+
+## Training data
+
+Training data comes from the simulator. `data_from_sim.py` runs a range of
+scenarios with different numbers of clients, delivery ratios, jitter, base
+RTT, burst losses and payload sizes, using CoAP and CoCoA as the sending
+strategies. For every successful exchange, the target RTO is set to
+SRTT + 4 × RTTVAR after the new RTT sample, capped per attempt. Failed
+exchanges are kept as timeout samples for the classifier.
+
+## Models
+
+- **Linear SVR** (`train_linear.py`). One model per retransmission attempt,
+  trained on the log of the target RTO. C and epsilon are tuned with
+  `GridSearchCV` (3-fold) for attempts with at least 100 samples.
+- **Kernel SVR** (`train_kernel.py`). A single RBF SVR on the log of the
+  target RTO, trained on at most 30 000 samples. C, gamma and epsilon are
+  tuned with `GridSearchCV` (3-fold).
+- **Timeout classifier** (`train_drop.py`). A random forest with balanced
+  class weights, calibrated with isotonic regression (5-fold).
 
 ## Simulator
 
-The models are trained and tested on data from a network simulator written in
-Python. It models several clients sending over a channel with configurable
-conditions, which makes it possible to compare all strategies under the same
-scenarios.
+`simulator_linear.py` and `simulator_kernel.py` model several clients
+sharing an IEEE 802.15.4-like channel with airtime, CCA backoff, hidden node
+collisions, burst losses and ACK loss. The two files differ mainly in the
+hardware profile of the ML client. The kernel SVR is given a longer inference
+delay and a higher energy cost per prediction than the linear SVR.
 
 ## How to run
 
-Install the dependencies:
+Install the dependencies.
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Run the full pipeline:
+Run the full pipeline.
 
 ```bash
 python run_all.py
 ```
 
-This runs the steps in order:
+This runs the following steps in order.
 
-1. `data_from_sim.py` generates training data from the simulator into `data/training_data.csv`
-2. `train_linear.py` trains the linear support vector regression model
-3. `train_kernel.py` trains the kernel support vector regression model
+1. `data_from_sim.py` generates training data into `data/training_data.csv`
+2. `train_linear.py` trains the per-attempt linear SVR models
+3. `train_kernel.py` trains the kernel SVR model
 4. `train_drop.py` trains the random forest timeout classifier
-5. `evaluate_policy.py` evaluates every strategy across load scenarios
-6. `generate_report.py` builds summary plots and tables
+5. `evaluate_policy.py` evaluates all strategies across load, burst,
+   payload and link quality scenarios
+6. `generate_report.py` runs a second load sweep and builds summary plots
+   and tables
 
-You can also run any single script on its own once the training data exists.
+Any single script can also be run on its own once the training data and
+models it depends on exist.
 
 ## Output
 
-- Plots in `plots/extended_report/` and `plots/results/`
-- Summary tables as CSV files in the same folders
-- Figures comparing throughput, latency and miss rate across the strategies
+- Trained models in `models/`
+- Evaluation plots and CSV files in `plots/extended_report/`, covering
+  goodput, latency, deadline miss rate, PDR, energy and a PDR heatmap
+- Summary plots and tables in `plots/results/`
+- A confusion matrix for the timeout classifier in `plots/`
 
 ## Requirements
 
-Python with numpy, pandas, scikit-learn, joblib, matplotlib and seaborn. All
+Python with numpy, pandas, scikit-learn, joblib, matplotlib and seaborn, all
 listed in `requirements.txt`.
